@@ -1,3 +1,318 @@
+# RU
+# Установка
+
+### Предварительные требования
+
+```bash
+# Обязательно
+PHP 8.2+
+Composer
+PostgreSQL 14+
+Redis (необязательно, для production)
+```
+
+## Шаг 1: Клонирование репозитория
+```bash
+git clone https://github.com/yourusername/digital-store-v2.git
+cd digital-store-v2
+cp .env.example .env
+```
+
+## Шаг 2: Установка зависимостей
+```bash
+composer install
+```
+
+## Шаг 3: Настройка окружения
+```bash
+cp .env.example .env
+php artisan key:generate
+```
+
+## Шаг 4: Настройка базы данных
+```bash
+# Запуск миграций и заполнения базы данных
+php artisan migrate:fresh --seed
+
+# Проверка установки
+php artisan db:show
+```
+
+## Step 5: Start Services
+
+```bash
+# Терминал 1: Веб-сервер
+php artisan serve --port=8000
+```
+
+
+# Задача 1: Заказ из нескольких товаров с частичной доставкой
+
+## Запуск автоматических тестов
+
+```bash
+# Запуск всех тестов для заказов из нескольких товаров
+php artisan test --filter=MultiOrderTest
+
+# Запуск конкретного теста
+php artisan test --filter=test_creates_multi_item_order
+php artisan test --filter=test_handles_partial_delivery_and_refund
+php artisan test --filter=test_maintains_financial_balance
+php artisan test --filter=test_retries_failed_items
+```
+
+## Сценарии ручного тестирования
+### Сценарий 1: Полная доставка (все товары доставлены)
+
+```bash
+# 1. Создать заказ
+curl -X POST http://127.0.0.1:8000/api/orders/multi \
+  -H "Content-Type: application/json" \
+  -d '{"items":[{"sku":"STEAM-TOPUP-500","quantity":1},{"sku":"KEY-CS2-PRIME","quantity":1}]}'
+
+# 2. Обработать платёж
+curl -X POST http://127.0.0.1:8000/api/webhook/payment \
+  -H "Content-Type: application/json" \
+  -d '{"event_id":"evt_test","order_id":"ORD-xxx","status":"paid","amount":1790,"currency":"RUB","created_at":"2025-01-01T12:00:00Z"}'
+
+# 3. Проверить заказ — статус должен быть "delivered"
+curl http://127.0.0.1:8000/api/orders/multi/ORD-xxx
+```
+
+### Сценарий 2: Частичная доставка (некоторые товары не доставлены)
+
+```bash
+# 1. Создать заказ
+curl -X POST http://127.0.0.1:8000/api/orders/multi \
+  -H "Content-Type: application/json" \
+  -d '{"items":[{"sku":"STEAM-TOPUP-500","quantity":1},{"sku":"KEY-CS2-PRIME","quantity":1},{"sku":"KEY-GTA5","quantity":1}]}'
+
+# 2. Обработать платёж
+curl -X POST http://127.0.0.1:8000/api/webhook/payment \
+  -H "Content-Type: application/json" \
+  -d '{"event_id":"evt_test","order_id":"ORD-xxx","status":"paid","amount":3780,"currency":"RUB","created_at":"2025-01-01T12:00:00Z"}'
+
+# 3. Проверить заказ — статус должен быть "partially_delivered"
+curl http://127.0.0.1:8000/api/orders/multi/ORD-xxx
+```
+
+### Сценарий 3: Дублирующий вебхук платежа
+
+```bash
+# Отправить дублирующий вебхук с тем же event_id
+curl -X POST http://127.0.0.1:8000/api/webhook/payment \
+  -H "Content-Type: application/json" \
+  -d '{"event_id":"evt_test","order_id":"ORD-xxx","status":"paid","amount":3780,"currency":"RUB","created_at":"2025-01-01T12:00:00Z"}'
+
+# Должен вернуть "already_processed"
+```
+
+### Scenario 4: Payment Failure
+
+```bash
+# Отправить неуспешный платёж
+curl -X POST http://127.0.0.1:8000/api/webhook/payment \
+  -H "Content-Type: application/json" \
+  -d '{"event_id":"evt_fail","order_id":"ORD-xxx","status":"failed","amount":3780,"currency":"RUB","created_at":"2025-01-01T12:00:00Z"}'
+
+# Статус заказа изменится на "payment_failed"
+curl http://127.0.0.1:8000/api/orders/multi/ORD-xxx
+```
+
+```bash
+chmod +x test_multi_order.sh
+./test_multi_order.sh
+```
+
+# Задача 2: Ненадёжный поставщик
+
+## Запуск автоматических тестов
+
+```bash
+# Запуск всех тестов для ненадёжного поставщика
+php artisan test --filter=SupplierUntrustworthyTest
+
+# Запуск конкретного теста
+php artisan test --filter=test_supplier_returns_error_but_issued_key
+php artisan test --filter=test_supplier_returns_duplicate_key
+php artisan test --filter=test_same_key_not_assigned_to_two_orders
+php artisan test --filter=test_retry_after_error_does_not_cause_double_issuance
+```
+
+## Ручное тестирование с помощью cURL
+
+### Тестовый сценарий 1: Поставщик возвращает ошибку, но выдаёт ключ
+
+```bash
+# 1. Create order
+ORDER_RESPONSE=$(curl -s -X POST http://localhost:8000/api/orders/multi \
+  -H "Content-Type: application/json" \
+  -d '{"items":[{"sku":"STEAM-TOPUP-500","quantity":1}]}')
+ORDER_ID=$(echo $ORDER_RESPONSE | jq -r '.order_id')
+echo "Order created: $ORDER_ID"
+
+# 2. Process payment
+curl -s -X POST http://localhost:8000/api/webhook/payment \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"event_id\": \"evt_test\",
+    \"order_id\": \"$ORDER_ID\",
+    \"status\": \"paid\",
+    \"amount\": 500,
+    \"currency\": \"RUB\",
+    \"created_at\": \"$(date -Iseconds)\"
+  }" | jq '.'
+
+sleep 2
+
+# 3. Check order - should be delivered with a key
+curl -s http://localhost:8000/api/orders/multi/$ORDER_ID | jq '.items[] | {sku, status, key_code, key_verified}'
+```
+
+### Тестовый сценарий 2: Обнаружение дублирующегося ключа
+
+```bash
+# Create multiple orders
+for i in {1..3}; do
+  RESPONSE=$(curl -s -X POST http://localhost:8000/api/orders/multi \
+    -H "Content-Type: application/json" \
+    -d '{"items":[{"sku":"STEAM-TOPUP-500","quantity":1}]}')
+  ORDER_ID=$(echo $RESPONSE | jq -r '.order_id')
+  echo "Order $i: $ORDER_ID"
+  
+  # Process payment
+  curl -s -X POST http://localhost:8000/api/webhook/payment \
+    -H "Content-Type: application/json" \
+    -d "{
+      \"event_id\": \"evt_${i}\",
+      \"order_id\": \"$ORDER_ID\",
+      \"status\": \"paid\",
+      \"amount\": 500,
+      \"currency\": \"RUB\",
+      \"created_at\": \"$(date -Iseconds)\"
+    }" > /dev/null
+done
+
+sleep 3
+
+# Check keys uniqueness
+echo -e "\nChecking keys..."
+curl -s http://localhost:8000/api/orders/multi/ORD-xxx | jq '.items[].key_code'
+```
+
+### Тестовый сценарий 3: Повторная попытка после ошибки
+
+```bash
+# 1. Create order
+ORDER_RESPONSE=$(curl -s -X POST http://localhost:8000/api/orders/multi \
+  -H "Content-Type: application/json" \
+  -d '{"items":[{"sku":"STEAM-TOPUP-500","quantity":1}]}')
+ORDER_ID=$(echo $ORDER_RESPONSE | jq -r '.order_id')
+echo "Order created: $ORDER_ID"
+
+# 2. Process payment
+curl -s -X POST http://localhost:8000/api/webhook/payment \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"event_id\": \"evt_test\",
+    \"order_id\": \"$ORDER_ID\",
+    \"status\": \"paid\",
+    \"amount\": 500,
+    \"currency\": \"RUB\",
+    \"created_at\": \"$(date -Iseconds)\"
+  }" > /dev/null
+
+sleep 2
+
+# 3. Check order
+echo "Order status:"
+curl -s http://localhost:8000/api/orders/multi/$ORDER_ID | jq '.order.status, .items[] | {sku, status, key_code}'
+
+# 4. Retry failed items (if any)
+echo -e "\nRetrying failed items..."
+curl -s -X POST http://localhost:8000/api/orders/multi/retry/$ORDER_ID | jq '.'
+
+sleep 2
+
+# 5. Check after retry
+echo -e "\nAfter retry:"
+curl -s http://localhost:8000/api/orders/multi/$ORDER_ID | jq '.order.status, .items[] | {sku, status, key_code}'
+```
+
+## Быстрый тестовый скрипт
+
+```bash
+chmod +x test_supplier_untrustworthy.sh
+./test_supplier_untrustworthy.sh
+```
+
+# Задача 3: Резкий рост заказов и ограничение частоты запросов поставщика — полное руководство
+
+## Автоматические тесты
+
+### Запуск всех тестов
+
+```bash
+php artisan test --filter=QueueTest
+```
+
+### Запуск отдельных тестов
+
+```bash
+# Test queueing when rate limit reached
+php artisan test --filter=test_queue_order_when_rate_limit_reached
+
+# Test paid orders have higher priority
+php artisan test --filter=test_paid_orders_have_higher_priority
+
+# Test queue status API
+php artisan test --filter=test_queue_status_returns_correct_counts
+
+# Test rate limit reset
+php artisan test --filter=test_rate_limit_resets_after_minute
+
+# Test batch processing
+php artisan test --filter=test_process_next_batch
+```
+
+# Задача 4: Восстановление на определённый момент времени
+
+## Автоматические тесты
+
+### Запуск всех тестов
+
+```bash
+  php artisan test --filter=RecoveryTest
+```
+
+### Скрипт ручного тестирования
+
+```bash
+# Test event recording
+php artisan test --filter=test_events_are_recorded_on_order_creation
+
+# Test order reconstruction
+php artisan test --filter=test_reconstruct_order_state
+
+# Test balance at time
+php artisan test --filter=test_get_balance_at_time
+
+# Test API reconstruction
+php artisan test --filter=test_api_reconstruct_order
+
+# Test period summary
+php artisan test --filter=test_period_summary
+```
+
+## Скрипт ручного тестирования
+
+```bash
+chmod +x test_recovery.sh
+./test_recovery.sh
+```
+
+# EN
+
 # Installation
 
 ### Prerequisites
@@ -13,7 +328,8 @@ Redis (optional, for production)
 ## Step 1: Clone Repository
 ```bash
 git clone https://github.com/yourusername/digital-store-v2.git
-cd digital-store
+cd digital-store-v2
+cd digital-store-v2
 ```
 
 ## Step 2: Install Dependencies
